@@ -1,0 +1,12 @@
+# Created by http://www.gitignore.io
+### Mac OS X ###
+.DS_Store
+
+### Erlang ###
+.eunit
+deps
+*.o
+*.beam
+*.plt
+erl_crash.dump
+
