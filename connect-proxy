@@ -1,0 +1,7 @@
+#!/usr/bin/env escript
+%% -*- erlang -*-
+
+main(_) ->
+	compile:file(connect_proxy),
+	connect_proxy:start(3000).
+
