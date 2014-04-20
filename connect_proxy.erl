@@ -13,6 +13,9 @@
 -define(HTTP_OPTIONS, [list,   {packet, 0}, {active, false}, {reuseaddr, true}, {packet,http}]).
 -define(TCP_OPTIONS,  [binary, {packet, 0}, {active, false}, {reuseaddr, true}]).
 
+-define(HTTP_PORT, 80).
+-define(HTTPS_PORT, 443).
+
 http_proxy() ->
 	case os:getenv("http_proxy") of
 		false ->
@@ -49,8 +52,8 @@ socket_handle(Sock) ->
 		{ok, {"CONNECT", Host, Port, Headers}} ->
 			io:format("~p~n", [Headers]),
 			do_ssl_proxy(Sock, Host, Port);
-		{ok, {Method, Host, Port, Headers}} ->
-			gen_tcp:close(Sock);
+		{ok, {Method, Host, Port, Path, Headers}} ->
+			do_proxy(Sock, Host, Port, Method, Path);
 		_ ->
 			gen_tcp:close(Sock)
 	end.
@@ -60,7 +63,20 @@ parse_request(Sock) ->
 		{ok, {http_request, Method, {scheme, Host, PortStr}, _Version}} ->
 			{Port, _} = string:to_integer(PortStr),
 			{ok, Headers} = parse_headers(Sock),
-			{ok, {Method, Host, Port, Headers}}
+			{ok, {Method, Host, Port, Headers}};
+		{ok, {http_request, Method, {absoluteURI, Protocol, Host, Port, Path}}} ->
+			{ok, Headers} = parse_headers(Sock),
+			case Port of
+				undefined ->
+					case Protocol of
+						http ->
+							{ok, {Method, Host, ?HTTP_PORT, Path, Headers}};
+						https ->
+							{ok, {Method, Host, ?HTTPS_PORT, Path, Headers}}
+					end;
+				true ->
+					{ok, {Method, Host, Port, Path, Headers}}
+			end
 	end.
 
 parse_headers(Sock) ->
@@ -76,6 +92,15 @@ parse_headers(Sock, Headers) ->
 		{error, Reason} ->
 			throw(Reason)
 	end.
+
+do_proxy(Sock, Host, Port, Method, Path) ->
+	printConnectLog(Host, Port),
+
+	inet:setopts(Sock, ?TCP_OPTIONS),
+	{ok, Proxy} = gen_tcp:connect(Host, Port, ?TCP_OPTIONS),
+	gen_tcp:send(Proxy, lists:flatten(io_lib:format("~s ~s HTTP/1.1\r\n\r\n", [Method, Path]))),
+	gen_tcp:controlling_process(Sock,  spawn(fun() -> pipe(Sock,  Proxy) end)),
+	gen_tcp:controlling_process(Proxy, spawn(fun() -> pipe(Proxy, Sock)  end)).
 
 do_ssl_proxy(Sock, Host, Port) ->
 	printConnectLog(Host, Port),
@@ -94,7 +119,7 @@ do_ssl_proxy(Sock, Host, Port) ->
 
 	case IsWhite of
 		true ->
-			gen_tcp:send(Proxy, lists:flatten(io_lib:format("CONNECT ~s:~s HTTP/1.0\r\n\r\n", [Host, Port])));
+			gen_tcp:send(Proxy, lists:flatten(io_lib:format("CONNECT ~s:~s HTTP/1.1\r\n\r\n", [Host, Port])));
 		false ->
 			gen_tcp:send(Sock, "HTTP/1.0 200 Connection established\r\n\r\n")
 	end,
