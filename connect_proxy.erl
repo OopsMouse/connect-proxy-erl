@@ -45,32 +45,39 @@ do_accept(LSock) ->
 	do_accept(LSock).
 
 socket_handle(Sock) ->
-	case get_http_request(Sock) of
-		{ok, {"CONNECT", Host, Port}} ->
-			do_proxy(Sock, Host, Port);
+	case parse_request(Sock) of
+		{ok, {"CONNECT", Host, Port, Headers}} ->
+			io:format("~p~n", [Headers]),
+			do_ssl_proxy(Sock, Host, Port);
+		{ok, {Method, Host, Port, Headers}} ->
+			gen_tcp:close(Sock);
 		_ ->
 			gen_tcp:close(Sock)
 	end.
 
-get_http_request(Sock) ->
+parse_request(Sock) ->
 	case gen_tcp:recv(Sock, 0) of
 		{ok, {http_request, Method, {scheme, Host, PortStr}, _Version}} ->
 			{Port, _} = string:to_integer(PortStr),
-			wait_eoh(Sock),
-			{ok, {Method, Host, Port}}
+			{ok, Headers} = parse_headers(Sock),
+			{ok, {Method, Host, Port, Headers}}
 	end.
 
-wait_eoh(Sock) ->
+parse_headers(Sock) ->
+	parse_headers(Sock, []).
+parse_headers(Sock, Headers) ->
 	case gen_tcp:recv(Sock, 0) of
 		{ok, http_eoh} ->
-			void;
-		{ok, {http_header, _, _, _, _}} ->
-			wait_eoh(Sock);
+			{ok, Headers};
+		{ok, {http_header, _, Header, _, Value}} ->
+			parse_headers(Sock, [{Header, Value}|Headers]);
+		{ok, {http_error, Reason}} ->
+			throw(Reason);
 		{error, Reason} ->
 			throw(Reason)
 	end.
 
-do_proxy(Sock, Host, Port) ->	
+do_ssl_proxy(Sock, Host, Port) ->
 	printConnectLog(Host, Port),
 
 	IsWhite = is_white(Host),
