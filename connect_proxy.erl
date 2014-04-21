@@ -13,19 +13,16 @@
 -define(HTTP_OPTIONS, [list,   {packet, 0}, {active, false}, {reuseaddr, true}, {packet,http}]).
 -define(TCP_OPTIONS,  [binary, {packet, 0}, {active, false}, {reuseaddr, true}]).
 
--define(HTTP_PORT, 80).
+-define(HTTP_PORT,  80).
 -define(HTTPS_PORT, 443).
 
 http_proxy() ->
 	case os:getenv("http_proxy") of
-		false ->
-			{ok, {"localhost", 8080}};
+		false -> undefined;
 		Proxy ->
 			case http_uri:parse(Proxy) of
 				{_, _, Host, Port, _, _} ->
-					{ok, {Host, Port}};
-				_ ->
-					{ok, {"localhost", 8080}}
+					{ok, {Host, Port}}
 			end
 	end.
 
@@ -54,7 +51,7 @@ socket_handle(Sock) ->
 			do_ssl_proxy(Sock, Host, Port);
 		{ok, {Method, Host, Port, Path, Headers}} ->
 			do_proxy(Sock, Host, Port, Method, Path);
-		_ ->
+		true ->
 			gen_tcp:close(Sock)
 	end.
 
@@ -64,7 +61,7 @@ parse_request(Sock) ->
 			{Port, _} = string:to_integer(PortStr),
 			{ok, Headers} = parse_headers(Sock),
 			{ok, {Method, Host, Port, Headers}};
-		{ok, {http_request, Method, {absoluteURI, Protocol, Host, Port, Path}}} ->
+		{ok, {http_request, Method, {absoluteURI, Protocol, Host, Port, Path}, _Version}} ->
 			{ok, Headers} = parse_headers(Sock),
 			case Port of
 				undefined ->
@@ -98,6 +95,7 @@ do_proxy(Sock, Host, Port, Method, Path) ->
 
 	inet:setopts(Sock, ?TCP_OPTIONS),
 	{ok, Proxy} = gen_tcp:connect(Host, Port, ?TCP_OPTIONS),
+	io:format("~s ~s HTTP/1.1\r\n\r\n", [Method, Path]),
 	gen_tcp:send(Proxy, lists:flatten(io_lib:format("~s ~s HTTP/1.1\r\n\r\n", [Method, Path]))),
 	gen_tcp:controlling_process(Sock,  spawn(fun() -> pipe(Sock,  Proxy) end)),
 	gen_tcp:controlling_process(Proxy, spawn(fun() -> pipe(Proxy, Sock)  end)).
