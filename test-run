@@ -1,0 +1,6 @@
+#!/usr/bin/env escript
+%% -*- erlang -*-
+
+main(_) ->
+	compile:file(connect_proxy_tests),
+	eunit:test(connect_proxy_tests).
