@@ -8,7 +8,7 @@
 % i.e. client <-HTTP-> this proxy <-HTTP-> internal git server.
 
 -module(connect_proxy).
--export([start/1]).
+-compile(export_all).
 
 -define(HTTP_OPTIONS, [list,   {packet, 0}, {active, false}, {reuseaddr, true}, {packet,http}]).
 -define(TCP_OPTIONS,  [binary, {packet, 0}, {active, false}, {reuseaddr, true}]).
@@ -17,12 +17,16 @@
 -define(HTTPS_PORT, 443).
 
 http_proxy() ->
-	case os:getenv("http_proxy") of
+	http_proxy(os:getenv("http_proxy")).
+http_proxy(HttpProxyEnv) ->
+	case HttpProxyEnv of
 		false -> undefined;
 		Proxy ->
 			case http_uri:parse(Proxy) of
-				{_, _, Host, Port, _, _} ->
-					{ok, {Host, Port}}
+				{ok, {_, _, Host, Port, _, _}} ->
+					{ok, {Host, Port}};
+				{error, _} ->
+					undefined
 			end
 	end.
 
