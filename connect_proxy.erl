@@ -130,17 +130,28 @@ do_proxy(Request) ->
 			gen_tcp:send(Proxy, "\r\n")
 	end,
 	
-	gen_tcp:controlling_process(Sock,  spawn(fun() -> pipe(Sock,  Proxy) end)),
-	gen_tcp:controlling_process(Proxy, spawn(fun() -> pipe(Proxy, Sock)  end)).
+	Monitor = spawn(fun() -> monitor_packet() end),
+	gen_tcp:controlling_process(Sock,  spawn(fun() -> pipe({client, Sock}, {server, Proxy}, Monitor) end)),
+	gen_tcp:controlling_process(Proxy, spawn(fun() -> pipe({server, Proxy}, {client, Sock}, Monitor) end)).
 
-pipe(FromSock, ToSock) ->
+pipe(From, To, Monitor) ->
+	{FromId, FromSock} = From,
+	{_     , ToSock}   = To,
 	case gen_tcp:recv(FromSock, 0) of
 		{ok, Data} ->
 			gen_tcp:send(ToSock, Data),
-			pipe(FromSock, ToSock);
+			Monitor ! {FromId, Data},
+			pipe(From, To, Monitor);
 		{error, _} ->
 			gen_tcp:close(FromSock),
 			gen_tcp:close(ToSock)
+	end.
+
+monitor_packet() ->
+	receive
+		{From, Data} ->
+			io:format("~p", [{From, Data}]),
+			monitor_packet()
 	end.
 
 printConnectLog(Request) ->
