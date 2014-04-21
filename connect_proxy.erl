@@ -17,9 +17,13 @@
 -define(HTTPS_PORT, 443).
 
 http_proxy() ->
-	http_proxy(os:getenv("http_proxy")).
-http_proxy(HttpProxyEnv) ->
-	case HttpProxyEnv of
+	parse_proxy(os:getenv("http_proxy")).
+
+https_proxy() ->
+	parse_proxy(os:getenv("https_proxy")).
+
+parse_proxy(ProxyEnv) ->
+	case ProxyEnv of
 		false -> undefined;
 		Proxy ->
 			case http_uri:parse(Proxy) of
@@ -45,16 +49,17 @@ start(Port) ->
 
 do_accept(LSock) ->
 	{ok, Sock} = gen_tcp:accept(LSock),
-	gen_tcp:controlling_process(Sock, spawn(fun() -> socket_handle(Sock) end)),
+	gen_tcp:controlling_process(Sock, spawn(fun() -> handle_socket(Sock) end)),
 	do_accept(LSock).
 
-socket_handle(Sock) ->
+handle_socket(Sock) ->
 	case parse_request(Sock) of
-		{ok, {"CONNECT", Host, Port, Headers}} ->
-			io:format("~p~n", [Headers]),
-			do_ssl_proxy(Sock, Host, Port);
-		{ok, {Method, Host, Port, Path, Headers}} ->
-			do_proxy(Sock, Host, Port, Method, Path);
+		{ok, {"CONNECT", Host, Port, Headers, _   }} ->
+			do_proxy("CONNECT", {Sock, Host, Port, Headers});
+
+		{ok, {Method,    Host, Port, Headers, Path}} ->
+			do_proxy(Method,    {Sock, Host, Port, Headers, Path});
+
 		true ->
 			gen_tcp:close(Sock)
 	end.
@@ -62,22 +67,26 @@ socket_handle(Sock) ->
 parse_request(Sock) ->
 	case gen_tcp:recv(Sock, 0) of
 		{ok, {http_request, Method, {scheme, Host, PortStr}, _Version}} ->
-			{Port, _} = string:to_integer(PortStr),
 			{ok, Headers} = parse_headers(Sock),
-			{ok, {Method, Host, Port, Headers}};
+
+			{Port, _} = string:to_integer(PortStr),
+			{ok, {Method, Host, Port, Headers, undefined}};
+
 		{ok, {http_request, Method, {absoluteURI, Protocol, Host, Port, Path}, _Version}} ->
 			{ok, Headers} = parse_headers(Sock),
+
 			case Port of
-				undefined ->
-					case Protocol of
-						http ->
-							{ok, {Method, Host, ?HTTP_PORT, Path, Headers}};
-						https ->
-							{ok, {Method, Host, ?HTTPS_PORT, Path, Headers}}
-					end;
+				undefined when http  =:= Protocol ->
+					P = ?HTTP_PORT;
+				undefined when https =:= Protocol ->
+					P = ?HTTPS_PORT;
 				true ->
-					{ok, {Method, Host, Port, Path, Headers}}
-			end
+					P = Port
+			end,
+			{ok, {Method, Host, P, Headers, Path}};
+
+		true ->
+			{error, "Failed to parse http request."}
 	end.
 
 parse_headers(Sock) ->
@@ -94,17 +103,8 @@ parse_headers(Sock, Headers) ->
 			throw(Reason)
 	end.
 
-do_proxy(Sock, Host, Port, Method, Path) ->
-	printConnectLog(Host, Port),
-
-	inet:setopts(Sock, ?TCP_OPTIONS),
-	{ok, Proxy} = gen_tcp:connect(Host, Port, ?TCP_OPTIONS),
-	io:format("~s ~s HTTP/1.1\r\n\r\n", [Method, Path]),
-	gen_tcp:send(Proxy, lists:flatten(io_lib:format("~s ~s HTTP/1.1\r\n\r\n", [Method, Path]))),
-	gen_tcp:controlling_process(Sock,  spawn(fun() -> pipe(Sock,  Proxy) end)),
-	gen_tcp:controlling_process(Proxy, spawn(fun() -> pipe(Proxy, Sock)  end)).
-
-do_ssl_proxy(Sock, Host, Port) ->
+do_proxy("CONNECT", Options) ->
+	{Sock, Host, Port, _} = Options,
 	printConnectLog(Host, Port),
 
 	IsWhite = is_white(Host),
@@ -126,6 +126,18 @@ do_ssl_proxy(Sock, Host, Port) ->
 			gen_tcp:send(Sock, "HTTP/1.0 200 Connection established\r\n\r\n")
 	end,
 	
+	gen_tcp:controlling_process(Sock,  spawn(fun() -> pipe(Sock,  Proxy) end)),
+	gen_tcp:controlling_process(Proxy, spawn(fun() -> pipe(Proxy, Sock)  end));
+
+do_proxy(Method, Options) ->
+	{Sock, Host, Port, Headers, Path} = Options,
+	printConnectLog(Host, Port),
+
+	inet:setopts(Sock, ?TCP_OPTIONS),
+	{ok, Proxy} = gen_tcp:connect(Host, Port, ?TCP_OPTIONS),
+	io:format("~s ~s HTTP/1.1\r\n\r\n", [Method, Path]),
+	gen_tcp:send(Proxy, lists:flatten(io_lib:format("~s ~s HTTP/1.1\r\n\r\n", [Method, Path]))),
+
 	gen_tcp:controlling_process(Sock,  spawn(fun() -> pipe(Sock,  Proxy) end)),
 	gen_tcp:controlling_process(Proxy, spawn(fun() -> pipe(Proxy, Sock)  end)).
 
