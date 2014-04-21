@@ -135,8 +135,11 @@ do_proxy(Method, Options) ->
 
 	inet:setopts(Sock, ?TCP_OPTIONS),
 	{ok, Proxy} = gen_tcp:connect(Host, Port, ?TCP_OPTIONS),
-	io:format("~s ~s HTTP/1.1\r\n\r\n", [Method, Path]),
-	gen_tcp:send(Proxy, lists:flatten(io_lib:format("~s ~s HTTP/1.1\r\n\r\n", [Method, Path]))),
+	gen_tcp:send(Proxy, lists:flatten(io_lib:format("~s ~s HTTP/1.1\r\n", [Method, Path]))),
+	lists:foreach(fun({Key, Value}) ->
+									gen_tcp:send(Proxy, lists:flatten(io_lib:format("~s:~s\r\n", [Key, Value])))
+								end, Headers),
+	gen_tcp:send(Proxy, "\r\n"),
 
 	gen_tcp:controlling_process(Sock,  spawn(fun() -> pipe(Sock,  Proxy) end)),
 	gen_tcp:controlling_process(Proxy, spawn(fun() -> pipe(Proxy, Sock)  end)).
