@@ -18,10 +18,6 @@
 
 http_proxy() ->
 	parse_proxy(os:getenv("http_proxy")).
-
-https_proxy() ->
-	parse_proxy(os:getenv("https_proxy")).
-
 parse_proxy(ProxyEnv) ->
 	case ProxyEnv of
 		false -> undefined;
@@ -54,12 +50,8 @@ do_accept(LSock) ->
 
 handle_socket(Sock) ->
 	case parse_request(Sock) of
-		{ok, {"CONNECT", Host, Port, Headers, _   }} ->
-			do_proxy("CONNECT", {Sock, Host, Port, Headers});
-
-		{ok, {Method,    Host, Port, Headers, Path}} ->
-			do_proxy(Method,    {Sock, Host, Port, Headers, Path});
-
+		{ok, Request} ->
+			do_proxy(Request);
 		true ->
 			gen_tcp:close(Sock)
 	end.
@@ -70,7 +62,7 @@ parse_request(Sock) ->
 			{ok, Headers} = parse_headers(Sock),
 
 			{Port, _} = string:to_integer(PortStr),
-			{ok, {Method, Host, Port, Headers, undefined}};
+			{ok, {Sock, Method, Host, Port, undefined, Headers}};
 
 		{ok, {http_request, Method, {absoluteURI, Protocol, Host, Port, Path}, _Version}} ->
 			{ok, Headers} = parse_headers(Sock),
@@ -83,7 +75,7 @@ parse_request(Sock) ->
 				true ->
 					P = Port
 			end,
-			{ok, {Method, Host, P, Headers, Path}};
+			{ok, {Sock, Method, Host, P, Path, Headers}};
 
 		true ->
 			{error, "Failed to parse http request."}
@@ -103,9 +95,15 @@ parse_headers(Sock, Headers) ->
 			throw(Reason)
 	end.
 
-do_proxy("CONNECT", Options) ->
-	{Sock, Host, Port, _} = Options,
-	printConnectLog(Host, Port),
+string_format(Format, Values) ->
+	lists:flatten(io_lib:format(Format, Values)).
+
+string_headers(Headers) ->
+	lists:flatten(lists:map(fun({Key, Value}) -> string_format("~s:~s\r\n", [Key, Value]) end, Headers)).
+
+do_proxy(Request) ->
+	{Sock, Method, Host, Port, Path, Headers} = Request,
+	printConnectLog(Request),
 
 	IsWhite = is_white(Host),
 	case IsWhite of
@@ -116,31 +114,22 @@ do_proxy("CONNECT", Options) ->
 			TargetPort = Port
 	end,
 
-	inet:setopts(Sock, ?TCP_OPTIONS),
+	inet:setopts(Sock, ?TCP_OPTIONS), % Change socket options from http to tcp.
 	{ok, Proxy} = gen_tcp:connect(TargetHost, TargetPort, ?TCP_OPTIONS),
 
-	case IsWhite of
+	case Method of
+		"CONNECT" when IsWhite =:= true  ->
+			gen_tcp:send(Proxy, string_format("CONNECT ~s:~s HTTP/1.1\r\n", [Host, Port])),
+			gen_tcp:send(Proxy, string_headers(Headers)),
+			gen_tcp:send(Proxy, "\r\n");
+		"CONNECT" when IsWhite =:= false ->
+			gen_tcp:send(Sock,  "HTTP/1.0 200 Connection established\r\n\r\n");
 		true ->
-			gen_tcp:send(Proxy, lists:flatten(io_lib:format("CONNECT ~s:~s HTTP/1.1\r\n\r\n", [Host, Port])));
-		false ->
-			gen_tcp:send(Sock, "HTTP/1.0 200 Connection established\r\n\r\n")
+			gen_tcp:send(Proxy, string_format("~s ~s HTTP/1.1\r\n", [Method, Path])),
+			gen_tcp:send(Proxy, string_headers(Headers)),
+			gen_tcp:send(Proxy, "\r\n")
 	end,
 	
-	gen_tcp:controlling_process(Sock,  spawn(fun() -> pipe(Sock,  Proxy) end)),
-	gen_tcp:controlling_process(Proxy, spawn(fun() -> pipe(Proxy, Sock)  end));
-
-do_proxy(Method, Options) ->
-	{Sock, Host, Port, Headers, Path} = Options,
-	printConnectLog(Host, Port),
-
-	inet:setopts(Sock, ?TCP_OPTIONS),
-	{ok, Proxy} = gen_tcp:connect(Host, Port, ?TCP_OPTIONS),
-	gen_tcp:send(Proxy, lists:flatten(io_lib:format("~s ~s HTTP/1.1\r\n", [Method, Path]))),
-	lists:foreach(fun({Key, Value}) ->
-									gen_tcp:send(Proxy, lists:flatten(io_lib:format("~s:~s\r\n", [Key, Value])))
-								end, Headers),
-	gen_tcp:send(Proxy, "\r\n"),
-
 	gen_tcp:controlling_process(Sock,  spawn(fun() -> pipe(Sock,  Proxy) end)),
 	gen_tcp:controlling_process(Proxy, spawn(fun() -> pipe(Proxy, Sock)  end)).
 
@@ -154,6 +143,7 @@ pipe(FromSock, ToSock) ->
 			gen_tcp:close(ToSock)
 	end.
 
-printConnectLog(Host, Port) ->
-	io:format("connect to ~p~n", [{Host, Port}]).
-
+printConnectLog(Request) ->
+	{Sock, _, Host, Port, _, _} = Request,
+	{ok, {Address, _}} = inet:peername(Sock),
+	io:format("[ ~p ] connect from ~p to ~p~n", [date(), Address, {Host, Port}]).
