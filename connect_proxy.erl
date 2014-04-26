@@ -58,13 +58,13 @@ handle_socket(Sock) ->
 
 parse_request(Sock) ->
 	case gen_tcp:recv(Sock, 0) of
-		{ok, {http_request, Method, {scheme, Host, PortStr}, _Version}} ->
+		{ok, {http_request, Method, {scheme, Host, PortStr}, _}} ->
 			{ok, Headers} = parse_headers(Sock),
 
 			{Port, _} = string:to_integer(PortStr),
 			{ok, {Sock, Method, Host, Port, undefined, Headers}};
 
-		{ok, {http_request, Method, {absoluteURI, Protocol, Host, Port, Path}, _Version}} ->
+		{ok, {http_request, Method, {absoluteURI, Protocol, Host, Port, Path}, _}} ->
 			{ok, Headers} = parse_headers(Sock),
 
 			case Port of
@@ -136,7 +136,7 @@ do_proxy(Request) ->
 
 pipe(From, To, Monitor) ->
 	{FromId, FromSock} = From,
-	{_     , ToSock}   = To,
+	{______, ToSock}   = To,
 	case gen_tcp:recv(FromSock, 0) of
 		{ok, Data} ->
 			gen_tcp:send(ToSock, Data),
